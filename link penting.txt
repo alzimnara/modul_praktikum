@@ -1,0 +1,6 @@
+- list fitur pada data hasil download osm
+https://wiki.openstreetmap.org/wiki/Map_features
+- map hazard
+https://giri.unepgrid.ch/map
+-read pbf file
+https://geopandas.org/en/v1.1.0/docs/reference/api/geopandas.read_file.html
