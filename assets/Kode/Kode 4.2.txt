@@ -1,0 +1,118 @@
+class Daerah:
+    """
+    Kelas untuk merepresentasikan dan memvisualisasikan batas administrasi daerah.
+    Parameters
+    ----------
+    nama_daerah : str
+        Nama daerah yang akan di-geocode. Pastikan tersedia di web OSM.
+    Attributes
+    ----------
+    nama : str
+        Nama daerah tanpa sufiks negara.
+    gdf : geopandas.GeoDataFrame
+        Geometri batas daerah sebagai GeoDataFrame.
+    crs : Any
+        Coordinate reference dari data asli.
+    geom : shapely.geometry
+        Geometri batas daerah sebagai objek Shapely.
+    gdf_proj : geopandas.GeoDataFrame
+        Geometri batas daerah yang diproyeksikan ke EPSG:3857 (Web Mercator)
+        untuk keperluan plotting.
+    BASEMAPS : dict
+        Konstanta kelas yang memetakan nama basemap ke URL tile atau provider-nya.
+    """
+
+    BASEMAPS = {
+        "osm": ctx.providers.OpenStreetMap.Mapnik,
+        "cartodb_positron": ctx.providers.CartoDB.Positron,
+        "cartodb_voyager": ctx.providers.CartoDB.Voyager,
+        "google_satellite": "https://mt1.google.com/vt/lyrs=s&x={x}&y={y}&z={z}",
+        "google_hybrid": "https://mt1.google.com/vt/lyrs=y&x={x}&y={y}&z={z}",
+    }
+
+    def __init__(self, nama_daerah: str) -> None:
+        """
+        Geocode nama tempat dan inisialisasi objek daerah.
+        Raises
+        ------
+        ValueError
+            Jika nama tempat tidak dapat di-geocode atau mengembalikan hasil kosong.
+        """
+        self.nama = nama_daerah.split(", ")[0]
+
+        # mengambil data dari osmnx
+        try:
+            self.gdf = ox.geocode_to_gdf(nama_daerah)
+            if self.gdf.empty:
+                raise ValueError(f"Data '{nama_daerah}' tidak ditemukan")
+        except Exception as e:
+            raise ValueError((f"Data '{nama_daerah}' tidak ditemukan.\n"
+                              f"Error: {str(e)}"))
+
+        # mengetahui crs dari gdf
+        self.crs = self.gdf.crs
+
+        # mengambil objek geometri untuk batas daerah dari gdf
+        self.geom = self.gdf.geometry.iloc[0]
+
+        # proyeksi gdf dalam meter untuk plotting
+        self.gdf_proj = self.gdf.to_crs(epsg=3857)
+
+    def plot(
+        self,
+        basemap: str = None,
+        padding: float = 1000,
+        savefig: bool = False
+    ) -> plt.Figure:
+        """
+        Plot batas daerah dengan peta dasar (basemap) opsional.
+        Parameters
+        ----------
+        basemap : str, optional
+            Peta dasar yang akan digunakan harus merupakan salah satu dari pilihan: "osm", "cartodb_positron", "cartodb_voyager",
+            "google_satellite", "google_hybrid". Jika None, tidak menambahkan peta dasar.
+        padding : float, default=1000
+            Jarak (dalam meter) yang ditambahkan di sekitar batas daerah saat
+            mengatur batas plot.
+        savefig : bool, default=False
+            Jika True, menyimpan figure dengan nama file dari `self.nama`.
+        Returns
+        -------
+        matplotlib.figure.Figure
+            Objek matplotlib figure yang berisi hasil plot.
+        """
+        fig = plt.figure(figsize=(5, 5))
+        ax = plt.axes()
+
+        # Mendapatkan batas persegi panjang dari gdf_proj
+        bounds = self.gdf_proj.geometry.total_bounds
+
+        # Membuat batas plot sesuai bounds supaya memuat gdf_proj
+        ax.set_xlim(bounds[0] - padding, bounds[2] + padding)
+        ax.set_ylim(bounds[1] - padding, bounds[3] + padding)
+
+        # Menambahkan basemap jika diperlukan
+        if basemap:
+            source = self.BASEMAPS.get(basemap)
+            ctx.add_basemap(ax,
+                            source=source,
+                            zorder=1)
+
+        self.gdf_proj.plot(ax=ax,
+                           facecolor='none',
+                           edgecolor='blue',
+                           linewidth=1,
+                           alpha=0.5,
+                           zorder=2)
+
+        ax.set_axis_off()
+        plt.tight_layout()
+
+        # menyimpan hasil plotting jika diperlukan
+        if savefig:
+            plt.savefig(self.nama)
+
+        plt.show()
+        plt.close(fig)
+
+        return fig

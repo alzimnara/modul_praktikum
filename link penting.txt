@@ -2,5 +2,9 @@
 https://wiki.openstreetmap.org/wiki/Map_features
 - map hazard
 https://giri.unepgrid.ch/map
--read pbf file
+- read pbf file
 https://geopandas.org/en/v1.1.0/docs/reference/api/geopandas.read_file.html
+- pedoman tag pada osm
+https://wiki.openstreetmap.org/wiki/Id:Pedoman_Penandaan_Indonesia
+- pedoman tag highway
+https://wiki.openstreetmap.org/wiki/Key:highway

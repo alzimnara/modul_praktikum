@@ -1,0 +1,119 @@
+class Jalan:
+    """
+    Kelas untuk merepresentasikan dan membersihkan data jaringan jalan dari OSM.
+    
+    Attributes
+    ----------
+    focused_types : list
+        Daftar tipe jalan yang menjadi fokus untuk dianalisis. Default: 
+        ["motorway", "trunk", "primary", "secondary", "tertiary", "residential"]
+    gdf_raw : geopandas.GeoDataFrame
+        Data jalan mentah hasil download dari OSM.
+    raw_numbers : int
+        Jumlah fitur jalan sebelum dibersihkan.
+    gdf_cleaned : geopandas.GeoDataFrame
+        Data jalan yang sudah dibersihkan dan difilter berdasarkan focused_types.
+    cleaned_numbers : int
+        Jumlah fitur jalan setelah dibersihkan.
+    """
+    
+    focused_types = ["motorway", "trunk", "primary",
+                     "secondary", "tertiary", "residential"]
+    
+    def __init__(self,
+                 region_geom: Union[Polygon, gpd.GeoSeries]
+        ) -> None:
+        """
+        Inisialisasi objek Jalan dengan data dari OSM.
+        
+        Parameters
+        ----------
+        region_geom : shapely.geometry.Polygon atau geopandas.GeoSeries
+            Geometri wilayah yang akan diambil data jalannya.
+        """
+        self._download_road_data(region_geom)
+        self.raw_numbers = len(self.gdf_raw)
+        self.gdf_cleaned = self._clean_raw_data()
+        self.cleaned_numbers = len(self.gdf_cleaned)
+    
+    def _download_road_data(self,
+                 region_geom: Union[Polygon, gpd.GeoSeries]
+        ) -> None:
+        """
+        Mengunduh data jalan dari OSM berdasarkan geometri wilayah.
+        
+        Parameters
+        ----------
+        region_geom : shapely.geometry.Polygon atau geopandas.GeoSeries
+            Geometri wilayah untuk batasan download data.
+        
+        Returns
+        -------
+        geopandas.GeoDataFrame
+            Data jalan mentah dengan kolom id, highway, dan geometry.
+        
+        Raises
+        ------
+        ValueError
+            Jika wilayah tidak memiliki data jalan di OSM.
+        
+        Notes
+        -----
+        Fungsi ini hanya mengambil fitur dengan geometri LineString
+        atau MultiLineString, serta melakukan explode pada MultiLineString
+        menjadi fitur terpisah.
+        """
+        tags = {"highway": True}
+        self.gdf_raw = ox.features.features_from_polygon(region_geom, tags)
+        
+        # Hanya mengambil fitur dengan geometri LineString atau MultiLineString
+        self.gdf_raw = (self.gdf_raw[self.gdf_raw.geom_type
+                           .isin(["LineString", "MultiLineString"])])
+        
+        if "highway" not in self.gdf_raw.columns:
+            raise ValueError("Daerah tidak mempunyai data jalan di OSM.")
+        
+        # Explode MultiLineString dan reset index
+        self.gdf_raw = (
+            self.gdf_raw.explode(index_parts=False)
+                        .reset_index(drop=False)
+        )
+        
+        # Memilih kolom yang relevan
+        self.gdf_raw = self.gdf_raw[["id", "highway", "geometry"]]
+    
+    def _clean_raw_data(self) -> gpd.GeoDataFrame:
+        """
+        Membersihkan dan memfilter data jalan mentah.
+        
+        Returns
+        -------
+        geopandas.GeoDataFrame
+            Data jalan yang sudah dibersihkan dengan tipe jalan yang sesuai
+            dengan focused_types.
+        
+        Notes
+        -----
+        Fungsi ini melakukan:
+        1. Mengganti tipe jalan *_link menjadi tipe utama (contoh: motorway_link -> motorway)
+        2. Mengganti nama kolom 'highway' menjadi 'object_type'
+        3. Memfilter hanya tipe jalan yang ada di focused_types
+        """
+        # Mengganti tipe jalan link menjadi tipe utama
+        cleaned = self.gdf_raw.copy()
+        cleaned["highway"] = cleaned["highway"].replace({
+            "motorway_link": "motorway",
+            "trunk_link": "trunk",
+            "primary_link": "primary",
+            "secondary_link": "secondary",
+            "tertiary_link": "tertiary"
+        })
+        
+        # Mengganti nama kolom
+        cleaned = cleaned.rename(columns={"highway": "object_type"})
+        
+        # Memfilter berdasarkan focused_types
+        return (
+            cleaned[cleaned["object_type"].isin(self.focused_types)]
+            .reset_index(drop=True)
+        )
