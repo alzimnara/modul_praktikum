@@ -1,0 +1,302 @@
+def _create_grid(bbox: shapely.Geometry, height: float) -> np.ndarray:
+    """
+    Membuat grid vektor reguler di atas bounding box.
+    
+    Parameters
+    ----------
+    bbox : shapely.Geometry
+        Bounding box yang akan ditutupi oleh grid.
+    height : float
+        Tinggi sel grid (diasumsikan sel berbentuk persegi).
+    
+    Returns
+    -------
+    np.ndarray
+        Array dari polygon Shapely yang membentuk grid.
+    """
+    # Mengambil batas bounding box (xmin, ymin, xmax, ymax)
+    total_bounds = shapely.total_bounds(bbox)
+    xmin, ymin = total_bounds[0], total_bounds[1]
+    xmax, ymax = total_bounds[2], total_bounds[3]
+    
+    # Menghitung jumlah baris dan kolom yang diperlukan
+    rows = int(np.ceil((ymax - ymin) / height))
+    cols = int(np.ceil((xmax - xmin) / height))
+    
+    # Menentukan titik sudut awal
+    x_left_origin = xmin
+    x_right_origin = xmin + height
+    y_top_origin = ymax
+    y_bottom_origin = ymax - height
+    
+    # Membuat grid secara iteratif
+    res_geoms = []
+    for countcols in range(cols):
+        y_top = y_top_origin
+        y_bottom = y_bottom_origin
+        for countrows in range(rows):
+            res_geoms.append(
+                (
+                    (
+                        (x_left_origin, y_top),
+                        (x_right_origin, y_top),
+                        (x_right_origin, y_bottom),
+                        (x_left_origin, y_bottom),
+                    )
+                )
+            )
+            y_top = y_top - height
+            y_bottom = y_bottom - height
+        x_left_origin = x_left_origin + height
+        x_right_origin = x_right_origin + height
+    
+    # Mengembalikan grid sebagai polygon shapely
+    return shapely.polygons(res_geoms)
+
+
+def _remove_duplicates(df: pd.DataFrame) -> pd.DataFrame:
+    """
+    Menggabungkan coverage dan values.
+    
+    Parameters
+    ----------
+    df : pandas.DataFrame
+        DataFrame dengan kemungkinan entri index yang duplikat.
+    
+    Returns
+    -------
+    pandas.DataFrame
+        DataFrame yang sudah dibersihkan dari duplikasi.
+    """
+    no_duplicates = []
+    
+    for row in df.groupby(level=0):
+        if len(row[1]) == 1:
+            # Menyimpan data tunggal apa adanya
+            no_duplicates.append(
+                [
+                    row[0],
+                    row[1]["coverage"].values[0],
+                    row[1]["values"].values[0],
+                ]
+            )
+        elif len(row[1]) > 1:
+            # Menggabungkan coverage dari semua duplikat
+            import itertools
+            cov_all = list(itertools.chain.from_iterable(row[1]["coverage"].values))
+            
+            # Menggabungkan values dari semua duplikat
+            val_all = list(itertools.chain.from_iterable(row[1]["values"].values))
+            
+            # Menyimpan hasil penggabungan
+            no_duplicates.append([row[0], cov_all, val_all])
+    
+    # Membuat DataFrame baru tanpa duplikat
+    df_no_duplicates = pd.DataFrame(
+        no_duplicates, columns=["index", "coverage", "values"]
+    ).set_index("index")
+    
+    return df_no_duplicates
+
+def _get_damage_per_object(asset: pd.Series,
+                           curves: pd.DataFrame,
+                           cell_area_m2: float
+                           ) -> float:
+    """
+    Menghitung kerusakan untuk satu aset menggunakan interpolasi kerentanan.
+    
+    Parameters
+    ----------
+    asset : pandas.Series
+        Satu fitur aset dengan atribut geometry, values, object_type,
+        coverage, dan maximum_damage.
+    curves : pandas.DataFrame
+        Dataframe kurva kerentanan dengan index kedalaman dan kolom tipe objek.
+    cell_area_m2 : float
+        Luas sel grid dalam meter persegi.
+    
+    Returns
+    -------
+    float
+        Estimasi nilai kerusakan untuk aset tersebut.
+    
+    Raises
+    ------
+    ValueError
+        Jika tipe geometri tidak didukung (harus Polygon, MultiPolygon,
+        LineString, atau MultiLineString) atau tipe objek tidak ditemukan
+        di kurva.
+    """
+    # Menghitung coverage berdasarkan tipe geometri
+    if asset.geometry.geom_type in ("Polygon", "MultiPolygon"):
+        coverage = np.array(asset["coverage"]) * cell_area_m2
+    elif asset.geometry.geom_type in ("LineString", "MultiLineString"):
+        coverage = asset["coverage"]
+    else:
+        raise ValueError(f"Tipe geometri {asset.geometry.geom_type} tidak didukung")
+    
+    # Menghitung kerusakan: interpolasi nilai hazard * coverage * maximum_damage
+    damage_interpolated = np.interp(asset["values"],
+                    curves.index,
+                    curves[asset["object_type"]].values)
+    object_loss = np.sum(damage_interpolated* coverage) * asset["maximum_damage"]
+    
+    return object_loss
+
+class Loss:
+    """
+    Kelas untuk menghitung kerugian (loss) berdasarkan hazard, eksposur, dan kurva kerusakan.
+    
+    Attributes
+    ----------
+    hazard_raw : xr.DataArray
+        Data hazard mentah (belum diproyeksikan).
+    eksposur_raw : geopandas.GeoDataFrame
+        Data eksposur mentah (belum diproyeksikan).
+    damage_curves : pandas.DataFrame
+        Kurva kerusakan untuk setiap tipe objek.
+    maxdam : pandas.DataFrame
+        Dataframe dengan kolom object_type dan damage (nilai maksimum kerusakan).
+    hazard : xr.DataArray
+        Data hazard yang sudah diproyeksikan ke EPSG:3857.
+    eksposur : geopandas.GeoDataFrame
+        Data eksposur yang sudah diproses dengan kolom loss.
+    total_loss : float
+        Total estimasi kerugian dari semua aset.
+    """
+    
+    def __init__(self,
+                 hazard: xr.DataArray,
+                 eksposur: gpd.GeoDataFrame,
+                 damage_curves: pd.DataFrame,
+                 maxdam: pd.DataFrame
+                 ) -> None:
+        """
+        Inisialisasi objek Loss dengan data hazard, eksposur, dan kurva kerusakan.
+        
+        Parameters
+        ----------
+        hazard : xr.DataArray
+            Data hazard (banjir, gempa, dll) dalam format xarray.
+        eksposur : geopandas.GeoDataFrame
+            Data eksposur aset dengan geometri dan atribut object_type.
+        damage_curves : pandas.DataFrame
+            Kurva kerusakan untuk setiap tipe objek.
+        maxdam : pandas.DataFrame
+            Dataframe dengan kolom object_type dan damage (nilai maksimum kerusakan).
+        """
+        self.hazard_raw = hazard
+        self.eksposur_raw = eksposur
+        self.damage_curves = damage_curves
+        self.maxdam = maxdam
+    
+    def calculate(self) -> gpd.GeoDataFrame:
+        """
+        Menghitung kerugian untuk setiap aset berdasarkan overlay hazard dan eksposur.
+        
+        Returns
+        -------
+        geopandas.GeoDataFrame
+            Dataframe eksposur dengan kolom tambahan:
+            - coverage: persentase tutupan grid pada aset
+            - values: nilai hazard pada aset
+            - maximum_damage: nilai maksimum kerusakan
+            - loss: estimasi kerugian
+        """
+        # Proyeksi ulang ke EPSG:3857 untuk konsistensi
+        hazard = self.hazard_raw.rio.reproject("EPSG:3857")
+        eksposur = self.eksposur_raw.to_crs(epsg=3857)
+        
+        # Ukuran sel grid dalam meter
+        grid_cell_size = 50000  # 50km x 50km
+        
+        # Membuat grid berdasarkan batas hazard
+        hazard_bound = hazard.rio.bounds()
+        bbox = shapely.box(
+            hazard_bound[0],
+            hazard_bound[1],
+            hazard_bound[2],
+            hazard_bound[3],
+        )
+        grid = _create_grid(bbox, grid_cell_size)
+        
+        # Mengambil semua batas grid
+        all_bounds = gpd.GeoDataFrame(grid, columns=["geometry"]).bounds
+        
+        collect_overlay = []
+        
+        # Looping untuk setiap grid cell
+        for bounds in tqdm(
+            all_bounds.itertuples(),
+            total=len(all_bounds),
+            desc="Overlay raster dengan vector"
+        ):
+            try:
+                # Memotong hazard berdasarkan batas grid
+                subset_hazard = hazard.rio.clip_box(
+                    minx=bounds.minx,
+                    miny=bounds.miny,
+                    maxx=bounds.maxx,
+                    maxy=bounds.maxy,
+                )
+                
+                # Membuat bounding box untuk spatial index
+                sub_bbox = shapely.box(
+                    bounds.minx, bounds.miny, bounds.maxx, bounds.maxy
+                )
+                
+                # Mencari aset-aset yang beririsan dengan grid
+                candidate_idx = eksposur.sindex.query(
+                    sub_bbox, predicate="intersects"
+                )
+                subset_eksposur = eksposur.iloc[candidate_idx]
+                
+                # Ekstraksi nilai hazard dan coverage
+                values_and_coverage_per_object = exact_extract(
+                    subset_hazard,
+                    subset_eksposur[["geometry"]],
+                    ["coverage", "values"],
+                    include_geom=False,
+                    output="pandas",
+                    strategy="raster-sequential"
+                )
+                
+                # Menghubungkan hasil dengan fitur asli
+                values_and_coverage_per_object.index = subset_eksposur.index
+                collect_overlay.append(values_and_coverage_per_object)
+                
+            except Exception as e:
+                print(f"Terjadi error pada grid {bounds.Index}: {e}")
+        
+        # Menggabungkan semua hasil overlay
+        df = pd.concat(collect_overlay).sort_index()
+        
+        # Menghapus duplikat (aset yang terkena multiple grid cells)
+        df_no_duplicates = _remove_duplicates(df)
+        
+        # Menambahkan coverage dan values ke eksposur
+        eksposur.loc[df_no_duplicates.index, "coverage"] = df_no_duplicates["coverage"]
+        eksposur.loc[df_no_duplicates.index, "values"] = df_no_duplicates["values"]
+        
+        # Menghitung luas pixel dalam meter persegi
+        cell_area_m2 = abs(
+            (hazard.x[1].values - hazard.x[0].values)
+            * (hazard.y[0].values - hazard.y[1].values)
+        )
+        
+        # Menggabungkan dengan nilai maksimum kerusakan (maxdam)
+        eksposur = (
+            eksposur.merge(self.maxdam, on='object_type', how='left')
+            .rename(columns={'damage': 'maximum_damage'})
+        )
+        
+        # Menghitung kerugian per aset dengan progress bar
+        tqdm.pandas(desc="Menghitung kerusakan per aset")
+        eksposur["loss"] = eksposur.progress_apply(
+            lambda _object: _get_damage_per_object(
+                _object, self.damage_curves, cell_area_m2
+            ),
+            axis=1,
+        )
+        
+        return eksposur

@@ -1,0 +1,113 @@
+class Publik:
+    """
+    Kelas untuk merepresentasikan dan membersihkan data fasilitas publik dari OSM.
+    
+    Attributes
+    ----------
+    gdf_raw : geopandas.GeoDataFrame
+        Data fasilitas publik mentah hasil download dari OSM.
+    raw_numbers : int
+        Jumlah fitur fasilitas publik sebelum dibersihkan.
+    gdf_cleaned : geopandas.GeoDataFrame
+        Data fasilitas publik yang sudah dibersihkan dan dikategorikan.
+    cleaned_numbers : int
+        Jumlah fitur fasilitas publik setelah dibersihkan.
+    """
+    
+    def __init__(self,
+                 region_geom: Union[Polygon, gpd.GeoSeries]
+                 ) -> None:
+        """
+        Inisialisasi objek Publik dengan data dari OSM.
+        
+        Parameters
+        ----------
+        region_geom : shapely.geometry.Polygon atau geopandas.GeoSeries
+            Geometri wilayah yang akan diambil data fasilitas publiknya.
+        """
+        self._download_publik_data(region_geom)
+        self.raw_numbers = len(self.gdf_raw)
+        self.gdf_cleaned = self._clean_raw_data()
+        self.cleaned_numbers = len(self.gdf_cleaned)
+    
+    def _download_publik_data(self,
+                              region_geom: Union[Polygon, gpd.GeoSeries]
+                              ) -> None:
+        """
+        Mengunduh data fasilitas publik dari OSM berdasarkan geometri wilayah.
+        
+        Parameters
+        ----------
+        region_geom : shapely.geometry.Polygon atau geopandas.GeoSeries
+            Geometri wilayah untuk batasan download data.
+        
+        Raises
+        ------
+        ValueError
+            Jika wilayah tidak memiliki data fasilitas publik di OSM.
+        
+        Notes
+        -----
+        Fungsi ini hanya mengambil fitur dengan geometri Polygon karena
+        fasilitas publik umumnya direpresentasikan sebagai area.
+        """
+        tags = {
+            "amenity": [
+                "kindergarten", "school", "college", "university",
+                "clinic", "hospital", "doctors", "dentist", "pharmacy"]
+            }
+        
+        # Mengunduh data dari OSM
+        self.gdf_raw = ox.features.features_from_polygon(region_geom, tags)
+        
+        # Hanya mengambil fitur dengan geometri Polygon
+        self.gdf_poly = (
+            self.gdf_raw[self.gdf_raw.geom_type == "Polygon"]
+            .copy()
+            .reset_index(drop=False)
+        )
+        
+        if "amenity" not in self.gdf_poly.columns:
+            raise ValueError("Daerah tidak mempunyai data bangunan publik di OSM.")
+        
+        # Memilih kolom yang relevan
+        self.gdf_poly = self.gdf_poly[["id", "amenity", "geometry"]]
+    
+    def _clean_raw_data(self) -> gpd.GeoDataFrame:
+        """
+        Membersihkan dan mengkategorikan data fasilitas publik.
+        
+        Returns
+        -------
+        geopandas.GeoDataFrame
+            Data fasilitas publik yang sudah dibersihkan dengan kategori yang
+            lebih umum (education, health, school).
+        
+        Notes
+        -----
+        Fungsi ini melakukan:
+        1. Mengelompokkan tipe fasilitas ke dalam kategori yang lebih umum:
+           - kindergarten, school tetap sebagai 'school'
+           - college, university menjadi 'education'
+           - clinic, hospital, doctors, dentist, pharmacy menjadi 'health'
+        2. Mengganti nama kolom 'amenity' menjadi 'object_type'
+        """
+        # Bekerja pada copy agar tidak mengubah data mentah
+        cleaned = self.gdf_poly.copy()
+        
+        # Mengelompokkan fasilitas ke kategori yang lebih umum
+        cleaned["amenity"] = cleaned["amenity"].replace({
+            "kindergarten": "school",
+            "college": "education",
+            "university": "education",
+            "clinic": "health",
+            "hospital": "health",
+            "doctors": "health",
+            "dentist": "health",
+            "pharmacy": "health"
+        })
+        
+        # Mengganti nama kolom amenity
+        cleaned = cleaned.rename(columns={"amenity": "object_type"})
+        
+        return cleaned

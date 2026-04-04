@@ -8,3 +8,11 @@ https://geopandas.org/en/v1.1.0/docs/reference/api/geopandas.read_file.html
 https://wiki.openstreetmap.org/wiki/Id:Pedoman_Penandaan_Indonesia
 - pedoman tag highway
 https://wiki.openstreetmap.org/wiki/Key:highway
+- kurva vulne
+https://zenodo.org/records/10203846/files/Table_D2_Multi-Hazard_Fragility_and_Vulnerability_Curves_V1.0.0.xlsx?download=1
+Function
+https://www.geeksforgeeks.org/python/python-functions/
+Class
+https://www.geeksforgeeks.org/python/python-classes-and-objects/
+Class Method vs Static Method vs Instance Method in Python
+https://www.geeksforgeeks.org/python/class-method-vs-static-method-vs-instance-method-in-python/

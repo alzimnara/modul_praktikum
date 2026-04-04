@@ -1,0 +1,106 @@
+class Gov:
+    """
+    Kelas untuk merepresentasikan dan membersihkan data bangunan pemerintahan dari OSM.
+    
+    Attributes
+    ----------
+    gdf_raw : geopandas.GeoDataFrame
+        Data bangunan pemerintahan mentah hasil download dari OSM.
+    raw_numbers : int
+        Jumlah fitur bangunan pemerintahan sebelum dibersihkan.
+    gdf_cleaned : geopandas.GeoDataFrame
+        Data bangunan pemerintahan yang sudah dibersihkan.
+    cleaned_numbers : int
+        Jumlah fitur bangunan pemerintahan setelah dibersihkan.
+    """
+    
+    def __init__(self,
+                 region_geom: Union[Polygon, gpd.GeoSeries]
+                 ) -> None:
+        """
+        Inisialisasi objek Gov dengan data dari OSM.
+        
+        Parameters
+        ----------
+        region_geom : shapely.geometry.Polygon atau geopandas.GeoSeries
+            Geometri wilayah yang akan diambil data bangunan pemerintahannya.
+        """
+        self._download_gov_data(region_geom)
+        self.raw_numbers = len(self.gdf_raw)
+        self.gdf_cleaned = self._clean_raw_data()
+        self.cleaned_numbers = len(self.gdf_cleaned)
+    
+    def _download_gov_data(self,
+                           region_geom: Union[Polygon, gpd.GeoSeries]
+                           ) -> None:
+        """
+        Mengunduh data bangunan pemerintahan dari OSM berdasarkan geometri wilayah.
+        
+        Parameters
+        ----------
+        region_geom : shapely.geometry.Polygon atau geopandas.GeoSeries
+            Geometri wilayah untuk batasan download data.
+        
+        Raises
+        ------
+        ValueError
+            Jika wilayah tidak memiliki data bangunan pemerintahan di OSM.
+        
+        Notes
+        -----
+        Fungsi ini mengambil data dengan dua pendekatan:
+        1. amenity=embassy (kedutaan besar)
+        2. office=government (kantor pemerintahan)
+        
+        Hanya fitur dengan geometri Polygon yang diambil karena bangunan
+        pemerintahan umumnya direpresentasikan sebagai area.
+        """
+        tags = {
+            "amenity": "embassy",
+            "office": "government"
+        }
+        
+        # Mengunduh data dari OSM
+        self.gdf_raw = ox.features.features_from_polygon(region_geom, tags)
+        
+        # Hanya mengambil fitur dengan geometri Polygon atau MultiPolygon
+        self.gdf_poly = (
+            self.gdf_raw[self.gdf_raw.geom_type
+                         .isin(["Polygon", "MultiPolygon"])]
+            .copy()
+            .reset_index(drop=False)
+        )
+        
+        # Memeriksa apakah ada kolom amenity atau office
+        if set(["amenity", "office"]).isdisjoint(set(self.gdf_poly.columns)):
+            raise ValueError("Daerah tidak mempunyai data bangunan pemerintahan di OSM.")
+        
+        # Memilih kolom yang relevan
+        self.gdf_poly = self.gdf_poly[["id", "geometry"]]
+    
+    def _clean_raw_data(self) -> gpd.GeoDataFrame:
+        """
+        Membersihkan dan menstandarisasi data bangunan pemerintahan.
+        
+        Returns
+        -------
+        geopandas.GeoDataFrame
+            Data bangunan pemerintahan yang sudah dibersihkan dengan kolom
+            object_type yang seragam (semua bertipe 'government').
+        
+        Notes
+        -----
+        Fungsi ini melakukan:
+        1. Menambahkan kolom object_type dengan nilai 'government' untuk semua data
+        2. Memilih kolom id, object_type, dan geometry
+        """
+        # Bekerja pada copy agar tidak mengubah data mentah
+        cleaned = self.gdf_poly.copy()
+        
+        # Menambahkan kolom object_type dengan nilai seragam
+        cleaned["object_type"] = "government"
+        
+        # Memilih kolom yang relevan
+        cleaned = cleaned[["id", "object_type", "geometry"]]
+        
+        return cleaned
