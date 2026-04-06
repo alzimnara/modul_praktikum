@@ -18,3 +18,5 @@ Class Method vs Static Method vs Instance Method in Python
 https://www.geeksforgeeks.org/python/class-method-vs-static-method-vs-instance-method-in-python/
 CRS
 http://spatialreference.org/ref/epsg/
+BIG
+https://tanahair.indonesia.go.id/portal-web/unduh/demnas
